@@ -34,6 +34,116 @@
   let transitionHoldTimer=0;
   let transitionHideTimer=0;
   let lastTeamPageKey='';
+  // QQ-friendly image loader: an instant lightweight preview, then high-resolution art.
+  // Keep only a few decoded full-size images resident at once.
+  const portraitImages=new Map();
+  let portraitToken=0;
+  let neighbourTimer=0;
+  function previewOf(p){return p.preview || p.focus || p.image;}
+  function portraitPath(p){return p.focus || p.image;}
+  function portraitEntry(path,callback){
+    if(!path){if(callback)callback(false);return;}
+    let entry=portraitImages.get(path);
+    if(!entry){
+      const image=new Image();
+      image.decoding='async';
+      entry={image,status:'loading',listeners:[]};
+      portraitImages.set(path,entry);
+      image.onload=()=>{
+        // Loaded bytes may not yet be decoded/paintable in QQ WebView.
+        const ready=()=>{
+          entry.status='ready';
+          const callbacks=entry.listeners.splice(0);
+          callbacks.forEach(fn=>fn(true));
+        };
+        if(typeof image.decode==='function')image.decode().then(ready,ready);
+        else ready();
+      };
+      image.onerror=()=>{
+        entry.status='error';
+        const callbacks=entry.listeners.splice(0);
+        callbacks.forEach(fn=>fn(false));
+      };
+      image.src=path;
+      while(portraitImages.size>4){
+        const oldest=portraitImages.keys().next().value;
+        if(oldest===path)break;
+        portraitImages.delete(oldest);
+      }
+    }else{
+      portraitImages.delete(path);
+      portraitImages.set(path,entry);
+    }
+    if(callback){
+      if(entry.status==='ready')callback(true);
+      else if(entry.status==='error')callback(false);
+      else entry.listeners.push(callback);
+    }
+    return entry;
+  }
+  function showPortrait(p){
+    const token=++portraitToken;
+    const target=$('personArt');
+    const big=portraitPath(p);
+    const preview=previewOf(p);
+    target.alt=`${p.name}的彩色人物大图`;
+    target.dataset.memberId=String(p.id);
+    target.onerror=()=>{
+      if(token!==portraitToken)return;
+      if(target.getAttribute('src')!==preview){
+        target.src=preview;
+      }else{
+        target.onerror=null;
+        target.src=p.mini;
+      }
+    };
+    const prior=portraitImages.get(big);
+    if(prior?.status==='ready'){
+      target.src=big;
+      target.classList.remove('art-preview');
+    }else{
+      // The preview is a small first-paint image: no blank panel while loading.
+      target.src=preview;
+      target.classList.add('art-preview');
+      portraitEntry(big,ok=>{
+        if(token!==portraitToken||view!=='profile'||personId!==Number(p.id))return;
+        if(ok){target.src=big;target.classList.remove('art-preview');}
+      });
+    }
+    clearTimeout(neighbourTimer);
+    neighbourTimer=setTimeout(()=>{
+      if(view!=='profile'||personId!==Number(p.id)||document.hidden)return;
+      if(navigator.connection?.saveData)return;
+      const people=teamPeople();
+      const i=people.findIndex(m=>m.id===p.id);
+      if(i<0||people.length<=1)return;
+      // Reuse already cached previews and preload only adjacent members.
+      [people[(i+1)%people.length],people[(i-1+people.length)%people.length]].forEach(n=>{
+        if(n?.id!==p.id)portraitEntry(portraitPath(n));
+      });
+    },420);
+  }
+  // A PNG failure falls back first to the previous WebP, then to a color thumbnail.
+  // This captures failures in dynamically rebuilt lists as well as the Q stamp.
+  document.addEventListener('error',e=>{
+    const img=e.target;
+    if(!(img instanceof HTMLImageElement))return;
+    const id=Number(img.dataset.avatarId);
+    const p=byId.get(id);
+    if(!p)return;
+    const attempt=Number(img.dataset.fallbackAttempt||0);
+    if(attempt===0){
+      img.dataset.fallbackAttempt='1';
+      img.src=p.mini.replace(/\.png$/i,'.webp');
+    }else if(attempt===1){
+      img.dataset.fallbackAttempt='2';
+      img.src=previewOf(p);
+    }else{
+      img.dataset.fallbackAttempt='3';
+      img.removeAttribute('src');
+      img.alt=p.name;
+    }
+  },true);
 
   function leadScore(role=''){
     let score=0;
@@ -127,7 +237,7 @@
     $('teamNav').innerHTML=teams.map((team,i)=>{
       const p=byId.get(team.ids[0]);const active=teamIndex===i;
       return `<button type="button" class="team-btn ${active?'active':''}" data-team="${i}" aria-pressed="${active}" aria-label="${escape(team.dept)}，${team.ids.length}位成员">
-        <span class="team-thumb"><img src="${p.mini}" loading="lazy" alt=""></span>
+        <span class="team-thumb"><img src="${p.mini}" loading="lazy" decoding="async" data-avatar-id="${p.id}" alt=""></span>
         <span class="team-copy"><b>${escape(team.center==='执行委'?'执行委':team.dept)} <i>»»</i></b><strong><em>${pad(team.no)}</em> ${escape(teamEnglish[team.dept]||'SQUAD')}</strong></span>
         <span class="slash-strip" aria-hidden="true">▰▰▰</span><span class="bg-num" aria-hidden="true">${pad(team.no)}</span>
       </button>`;
@@ -340,7 +450,7 @@
         title="${escape(p.name)} · ${escape(p.role)}"
         style="--fx:${v.x}%;--fy:${v.y}%;--fs:${v.s};--fr:${v.a}deg;--fz:${v.z};--fd:${i*85}ms">
         <span class="fighter-energy" aria-hidden="true"></span>
-        <span class="fighter-portrait"><img src="${escape(p.focus||p.image)}" alt="" loading="eager" draggable="false"></span>
+        <span class="fighter-portrait"><img src="${escape(previewOf(p))}" alt="" loading="eager" decoding="async" draggable="false"></span>
         <span class="fighter-caption"><small>${pad(seq)} // ${escape(p.role)}</small><b>${escape(p.name)}</b></span>
         <span class="fighter-target" aria-hidden="true">＋</span>
       </button>`;
@@ -367,10 +477,14 @@
     $('profileScene').classList.toggle('is-long-role',p.role.length>=11);
     $('personDept').textContent=p.dept;
     $('hudSerial').textContent=`KG / ${pad(p.id,3)}`;
-    $('personArt').src=p.focus||p.image;
-    $('personArt').alt=`${p.name}的彩色人物大图`;
-    $('personQ').src=p.mini;
-    $('personQ').alt=`${p.name}的Q版头像`;
+    showPortrait(p);
+    const q=$('personQ');
+    q.dataset.avatarId=String(p.id);
+    q.dataset.fallbackAttempt='0';
+    q.loading='eager';
+    q.decoding='async';
+    q.src=p.mini;
+    q.alt=`${p.name}的Q版头像`;
     const facts=[['所属中心',p.center],['年级专业',p.grade],['学号',p.studentId],['宿舍号',p.dorm],['手机号',p.phone],['出生日期',p.birth],['星座',p.zodiac]];
     $('factsCard').innerHTML=facts.map(([k,v])=>`<div class="fact-row"><span>${escape(k)}</span><strong>${escape(v||'不详')}</strong></div>`).join('');
     $('stageHeading').textContent='PERSONNEL PROFILE';
@@ -379,7 +493,7 @@
   function renderBottom(){
     const ps=pagePeople();
     $('memberCards').innerHTML=ps.map((p,i)=>`<button type="button" class="member-card ${view==='profile'&&p.id===personId?'active':''}" data-person="${p.id}" aria-pressed="${view==='profile'&&p.id===personId}">
-      <span class="member-photo"><img src="${p.mini}" loading="lazy" alt=""></span><span class="member-card-copy"><small>隊員 ${pad(page*5+i+1)}</small><b>${escape(p.name)}</b><span>${escape(p.role)}</span></span><span class="card-angled" aria-hidden="true">❯</span>
+      <span class="member-photo"><img src="${p.mini}" loading="eager" decoding="async" data-avatar-id="${p.id}" alt=""></span><span class="member-card-copy"><small>隊員 ${pad(page*5+i+1)}</small><b>${escape(p.name)}</b><span>${escape(p.role)}</span></span><span class="card-angled" aria-hidden="true">❯</span>
     </button>`).join('');
     const box=$('otherJobs');
     if(view==='profile'){
@@ -433,7 +547,7 @@
       return [p.name,p.center,p.dept,p.role,p.grade,p.studentId,roman[p.name],p.zodiac].join(' ').toLowerCase().includes(q);
     });
     $('searchResultCount').textContent=`${pad(matched.length)} RECORDS`;
-    $('searchResults').innerHTML=matched.length?matched.map(p=>`<button class="result-card" type="button" data-person="${p.id}"><img src="${p.mini}" loading="lazy" alt=""><span class="result-copy"><b>${escape(p.name)}</b><small>${escape(p.center)} / ${escape(p.dept)}</small><span>${escape(p.role)}</span></span><em>KG ${pad(p.id,3)}</em></button>`).join(''):'<p class="empty-result">没有匹配的成员</p>';
+    $('searchResults').innerHTML=matched.length?matched.map(p=>`<button class="result-card" type="button" data-person="${p.id}"><img src="${p.mini}" loading="lazy" decoding="async" data-avatar-id="${p.id}" alt=""><span class="result-copy"><b>${escape(p.name)}</b><small>${escape(p.center)} / ${escape(p.dept)}</small><span>${escape(p.role)}</span></span><em>KG ${pad(p.id,3)}</em></button>`).join(''):'<p class="empty-result">没有匹配的成员</p>';
   }
   function openDrawer(){
     savedFocus=document.activeElement;

@@ -414,3 +414,8 @@
   }
   .team-transition-shell img{padding:8px!important}
 }
+
+/* 2026 QQ avatar/image reliability update */
+.q-hex img{object-fit:contain!important;object-position:center center!important;background:#f1fcff}
+.member-photo img,.team-thumb img,.result-card img{object-fit:contain!important;object-position:center!important}
+.person-art-button img.art-preview{filter:saturate(1.02) contrast(1.02)}
