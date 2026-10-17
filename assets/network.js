@@ -14,8 +14,8 @@
   const $=id=>document.getElementById(id);
   const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let index=0,chosenCenter='全部',ready=false,renderId=0;
-  let fishCtx=null,fishCanvas=null,fish=[],suspended=true,raf=0,lastPaint=0;
-  let w=0,h=0,dpr=1,frame=0;
+  let fishCtx=null,fishCanvas=null,fish=[],suspended=true,fishTimer=0;
+  let w=0,h=0;
   const reduce=window.matchMedia('(prefers-reduced-motion: reduce)');
 
   function nodeTeam(t,i){
@@ -36,7 +36,7 @@
   function renderMap(){
     if(!$('networkNodes'))return;
     $('networkNodes').innerHTML=`<div class="network-node network-core" style="--nx:50%;--ny:${layout.root[1]/6.10}%" aria-label="昆冈众创">
-        <span class="network-core-ring"></span><b>KG</b><small>昆冈众创</small>
+        <span class="network-core-ring"></span><img class="network-core-logo" src="assets/kungang-icon.png" alt="" draggable="false"><small>昆冈众创</small>
       </div>`+centers.map(nodeHub).join('')+teams.map(nodeTeam).join('');
     let lines=`<circle cx="500" cy="311" r="118" class="network-orbit"/><circle cx="500" cy="311" r="230" class="network-orbit faint"/>`;
     for(const c of centers)lines+=svgLine(layout.root,layout.hubs[c],'hub');
@@ -44,7 +44,7 @@
     for(const t of teams){if(t.dept==='执行委')continue;lines+=svgLine(layout.hubs[t.center],layout.deps[t.dept],'normal');}
     $('networkLines').innerHTML=lines;
     $('networkMobile').innerHTML=`
-      <div class="mobile-network-core"><b>KG</b><div><strong>昆冈众创</strong><span>ORGANIZATION CORE</span></div></div>
+      <div class="mobile-network-core"><img class="mobile-network-logo" src="assets/kungang-icon.png" alt="" draggable="false"><div><strong>昆冈众创</strong><span>ORGANIZATION CORE</span></div></div>
       <div class="mobile-network-link" aria-hidden="true"></div>
       <div class="mobile-network-exec">${mobileTeam(teams[0],0)}</div>
       <div class="mobile-network-clusters">${centers.map((c,i)=>{
@@ -83,77 +83,86 @@
       el.classList.toggle('related',name===c);
     });
   }
+  // Low-power menu-only fish: 3 on phones, 5 on desktop, 8-10 redraws/sec.
+  // No per-frame shadows, gradients or permanent requestAnimationFrame loop.
   function resizeFish(){
     if(!fishCanvas||!fishCtx)return;
     const rect=fishCanvas.getBoundingClientRect();
-    w=Math.max(1,Math.round(rect.width));h=Math.max(1,Math.round(rect.height));
-    dpr=Math.min(window.devicePixelRatio||1,1.4);
-    fishCanvas.width=Math.floor(w*dpr);fishCanvas.height=Math.floor(h*dpr);
-    fishCtx.setTransform(dpr,0,0,dpr,0,0);
-    const limit=(window.innerWidth<650)?8:14;
+    w=Math.max(1,Math.round(rect.width)); h=Math.max(1,Math.round(rect.height));
+    // Limit the backing store, especially on 3x-DPR phones and wide desktops.
+    const scale=Math.min(1,960/w,760/h);
+    fishCanvas.width=Math.max(1,Math.ceil(w*scale));
+    fishCanvas.height=Math.max(1,Math.ceil(h*scale));
+    fishCtx.setTransform(scale,0,0,scale,0,0);
+    const limit=window.innerWidth<650?3:5;
     fish=Array.from({length:limit},(_,i)=>spawn(i,true));
   }
   function spawn(i,scatter){
-    const dir=i%4===0?-1:1;
-    return {x:scatter?Math.random()*w:(dir>0?-48:w+48),y:(.10+Math.random()*.8)*h,
-      dir,size:(window.innerWidth<650?11:14)+Math.random()*(window.innerWidth<650?15:23),
-      speed:(.24+Math.random()*.34)*(window.innerWidth<650?.78:1),phase:Math.random()*6.28,
-      hue:i%4===0?195:184,opacity:.25+Math.random()*.27};
+    const dir=i%3===0?-1:1;
+    return {
+      x:scatter?Math.random()*w:(dir>0?-38:w+38),
+      y:(.11+Math.random()*.74)*h,
+      dir,
+      size:(window.innerWidth<650?13:17)+Math.random()*10,
+      speed:(window.innerWidth<650?11:17)+Math.random()*11,
+      phase:Math.random()*6.28,
+      opacity:.34+Math.random()*.18
+    };
   }
-  function drawFish(t){
-    if(!fishCtx)return;
+  function drawFish(now,advance){
+    if(!fishCtx||!w||!h)return;
     const ctx=fishCtx;
     ctx.clearRect(0,0,w,h);
-    const motion=!reduce.matches&&!document.body.classList.contains('fx-off');
-    const secs=motion?t/1000:0;
-    // Restrained ocean beams behind the relationship graph.
-    const beam=ctx.createLinearGradient(0,0,w,h);
-    beam.addColorStop(0,'rgba(35,180,230,.032)');beam.addColorStop(.5,'rgba(0,55,120,0)');beam.addColorStop(1,'rgba(10,180,235,.025)');
-    ctx.fillStyle=beam;ctx.fillRect(0,0,w,h);
+    const t=now/1000;
     for(let i=0;i<fish.length;i++){
-      const f=fish[i];
-      const swimming=secs*.85+f.phase;
-      const tail=Math.sin(swimming*4.1)*.26;
-      if(motion){
-        f.x+=f.speed*f.dir;
-        f.y+=Math.sin(swimming*.7)*.11;
-        if((f.dir>0&&f.x>w+70)||(f.dir<0&&f.x< -70))fish[i]=spawn(i,false);
+      let f=fish[i];
+      if(advance){
+        f.x+=f.speed*(window.innerWidth<650?.13:.11)*f.dir;
+        f.y+=Math.sin(t*.7+f.phase)*.11;
+        if((f.dir>0&&f.x>w+48)||(f.dir<0&&f.x< -48))f=fish[i]=spawn(i,false);
       }
-      ctx.save();ctx.translate(f.x,f.y);ctx.scale(f.dir,1);
-      ctx.rotate(Math.sin(swimming*.45)*.10);
-      const scale=f.size/22;ctx.scale(scale,scale);
-      ctx.shadowBlur=18;ctx.shadowColor=`hsla(${f.hue},100%,73%,.58)`;
-      ctx.strokeStyle=`hsla(${f.hue},100%,81%,${f.opacity+.22})`;
-      ctx.fillStyle=`hsla(${f.hue},100%,63%,${f.opacity*.46})`;
-      ctx.lineWidth=1.3;
-      // Torpedo-shaped fish body, animated caudal fin, dorsal + pectoral fins.
-      ctx.beginPath();ctx.moveTo(13,0);ctx.bezierCurveTo(3,-6,-11,-7,-19,0);ctx.bezierCurveTo(-11,7,3,6,13,0);ctx.closePath();ctx.fill();ctx.stroke();
-      ctx.save();ctx.translate(-19,0);ctx.rotate(tail);
-      ctx.beginPath();ctx.moveTo(0,0);ctx.quadraticCurveTo(-10,-11,-14,-9);ctx.lineTo(-10,0);ctx.lineTo(-14,9);ctx.quadraticCurveTo(-9,11,0,0);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
-      ctx.beginPath();ctx.moveTo(-3,-4);ctx.lineTo(-7,-10);ctx.lineTo(4,-4);ctx.stroke();
-      ctx.beginPath();ctx.moveTo(-3,4);ctx.lineTo(-8,10);ctx.lineTo(5,3);ctx.stroke();
-      ctx.fillStyle='rgba(225,255,255,.70)';ctx.shadowBlur=0;ctx.beginPath();ctx.arc(8,-1,1.1,0,Math.PI*2);ctx.fill();
+      ctx.save();
+      ctx.translate(f.x,f.y);
+      ctx.scale(f.dir*f.size/22,f.size/22);
+      ctx.rotate(Math.sin(t*.35+f.phase)*.045);
+      // Two inexpensive crisp strokes give a neon-fish impression.
+      ctx.lineWidth=2;
+      ctx.strokeStyle=`rgba(66,222,255,${f.opacity*.52})`;
+      ctx.beginPath();
+      ctx.moveTo(14,0);ctx.quadraticCurveTo(0,-7,-18,0);ctx.quadraticCurveTo(0,7,14,0);
+      ctx.moveTo(-18,0);ctx.lineTo(-30,-9);ctx.lineTo(-27,0);ctx.lineTo(-30,9);ctx.closePath();
+      ctx.stroke();
+      ctx.strokeStyle=`rgba(176,255,255,${f.opacity+.25})`;
+      ctx.lineWidth=.8;
+      ctx.beginPath();ctx.moveTo(10,0);ctx.quadraticCurveTo(-1,-5,-14,0);ctx.quadraticCurveTo(-1,5,10,0);ctx.stroke();
       ctx.restore();
     }
   }
-  function fishTick(now){
-    if(suspended)return;
-    if(now-lastPaint>32){lastPaint=now;drawFish(now);}
-    raf=requestAnimationFrame(fishTick);
-  }
-  function startFish(){
-    suspended=false;
-    if(!fishCanvas||!fishCtx)return;
-    resizeFish();lastPaint=0;
-    if(raf)cancelAnimationFrame(raf);
-    if(reduce.matches||document.body.classList.contains('fx-off')){drawFish(1000);return;}
-    raf=requestAnimationFrame(fishTick);
-  }
   function stopFish(){
     suspended=true;
-    if(raf)cancelAnimationFrame(raf);
-    raf=0;
+    if(fishTimer){clearTimeout(fishTimer);fishTimer=0;}
     if(fishCtx)fishCtx.clearRect(0,0,w,h);
+  }
+  function fishTick(){
+    if(suspended||document.hidden)return;
+    drawFish(performance.now(),true);
+    fishTimer=setTimeout(fishTick,window.innerWidth<650?135:110);
+  }
+  function startFish(){
+    stopFish();
+    if(!fishCtx||!fishCanvas||document.hidden)return;
+    resizeFish();
+    suspended=false;
+    if(reduce.matches || document.body.classList.contains('fx-off')){
+      drawFish(0,false);
+      return;
+    }
+    fishTick();
+  }
+  function refreshMotion(){
+    const drawer=$('drawer');
+    if(drawer?.classList.contains('open'))startFish();
+    else stopFish();
   }
   function init(){
     if(ready||!teams.length||!$('networkNodes'))return;
@@ -174,13 +183,14 @@
       const button=$('networkNodes').querySelector(`[data-team="${index}"]`);
       if(button)button.click();
     });
-    window.addEventListener('resize',()=>{if(!suspended)resizeFish();},{passive:true});
+    window.addEventListener('resize',()=>{if(!suspended)startFish();},{passive:true});
     document.addEventListener('visibilitychange',()=>{
       if(document.hidden)stopFish();
       else if(drawer.classList.contains('open'))startFish();
     });
+    if(reduce.addEventListener)reduce.addEventListener('change',refreshMotion);
   }
   function open(activeIndex){init();sync(activeIndex);startFish();}
   function close(){stopFish();}
-  window.KG_NETWORK={init,open,close,sync,highlightCenter,debug:()=>({ready,suspended,fishCount:fish.length,activeIndex:index})};
+  window.KG_NETWORK={init,open,close,sync,highlightCenter,refreshMotion,debug:()=>({ready,suspended,fishCount:fish.length,activeIndex:index,timerActive:!!fishTimer,backingSize:fishCanvas?[fishCanvas.width,fishCanvas.height]:null})};
 })();

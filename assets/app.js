@@ -68,107 +68,8 @@
     ordered.splice(centerIndex,0,lead);
     return ordered;
   }
-  let ambientFxState=null;
-
-  function ensureAmbientFx(){
-    const ambient=document.querySelector('.ambient');
-    if(!ambient||ambient.querySelector('.ambient-tech-layer'))return;
-    const layer=document.createElement('div');
-    layer.className='ambient-tech-layer';
-    const field=document.createElement('div');
-    field.className='diamond-field';
-    const placements=[
-      [7,14,28,0,16],[18,62,42,-6,18],[24,30,18,5,15],[31,78,54,-3,22],[39,12,36,8,20],[46,54,22,-5,17],
-      [55,84,26,7,19],[63,36,46,-9,23],[71,18,22,3,16],[79,68,34,-7,21],[86,49,24,4,18],[90,88,32,-4,20]
-    ];
-    placements.forEach((item,index)=>{
-      const el=document.createElement('span');
-      el.className='ambient-diamond';
-      el.style.setProperty('--left',item[0]+'%');
-      el.style.setProperty('--top',item[1]+'%');
-      el.style.setProperty('--size',item[2]+'px');
-      el.style.setProperty('--tilt',item[3]+'deg');
-      el.style.setProperty('--floatDur',(item[4]+(index%3)*2)+'s');
-      el.style.setProperty('--delay',(-index*.9)+'s');
-      el.style.setProperty('--drift',((index%2?1:-1)*(8+index%4*2))+'px');
-      field.appendChild(el);
-    });
-    const canvas=document.createElement('canvas');
-    canvas.className='ambient-canvas';
-    canvas.setAttribute('aria-hidden','true');
-    layer.append(field,canvas);
-    ambient.appendChild(layer);
-    initAmbientCanvas(canvas);
-  }
-
-  function initAmbientCanvas(canvas){
-    const ctx=canvas.getContext('2d');
-    if(!ctx)return;
-    const reduce=window.matchMedia('(prefers-reduced-motion: reduce)');
-    const state={canvas,ctx,particles:[],w:0,h:0,dpr:1,raf:0};
-    ambientFxState=state;
-
-    function respawn(p,scatter=false){
-      p.x=scatter?Math.random()*state.w:(Math.random()*state.w);
-      p.y=scatter?Math.random()*state.h:(state.h+10+Math.random()*state.h*.2);
-      p.vx=(Math.random()-.5)*.34;
-      p.vy=-(.22+Math.random()*.58);
-      p.size=.7+Math.random()*1.9;
-      p.alpha=.18+Math.random()*.52;
-      p.phase=Math.random()*Math.PI*2;
-    }
-
-    function resizeAmbientCanvas(){
-      const rect=canvas.getBoundingClientRect();
-      state.w=Math.max(1,Math.round(rect.width||canvas.parentElement?.clientWidth||window.innerWidth));
-      state.h=Math.max(1,Math.round(rect.height||canvas.parentElement?.clientHeight||window.innerHeight));
-      state.dpr=Math.min(window.devicePixelRatio||1,2);
-      canvas.width=Math.round(state.w*state.dpr);
-      canvas.height=Math.round(state.h*state.dpr);
-      ctx.setTransform(state.dpr,0,0,state.dpr,0,0);
-      const count=Math.max(28,Math.min(64,Math.round((state.w*state.h)/30000)));
-      state.particles=Array.from({length:count},()=>{const p={};respawn(p,true);return p;});
-    }
-
-    function drawFrame(ts){
-      const disabled=document.body.classList.contains('fx-off')||reduce.matches;
-      ctx.clearRect(0,0,state.w,state.h);
-      if(!disabled){
-        for(let i=0;i<state.particles.length;i++){
-          const p=state.particles[i];
-          p.x+=p.vx+Math.sin((ts*0.0004)+p.phase)*0.12;
-          p.y+=p.vy;
-          if(p.y<-18||p.x<-18||p.x>state.w+18)respawn(p,false);
-        }
-        ctx.lineWidth=1;
-        for(let i=0;i<state.particles.length;i++){
-          const a=state.particles[i];
-          for(let j=i+1;j<state.particles.length;j++){
-            const b=state.particles[j];
-            const dx=a.x-b.x,dy=a.y-b.y;
-            const dist=Math.hypot(dx,dy);
-            if(dist<108){
-              ctx.strokeStyle=`rgba(113,247,250,${((1-dist/108)*0.08).toFixed(3)})`;
-              ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
-            }
-          }
-        }
-        for(const p of state.particles){
-          const glow=p.size*5;
-          ctx.fillStyle=`rgba(178,252,255,${p.alpha.toFixed(3)})`;
-          ctx.shadowBlur=glow;
-          ctx.shadowColor='rgba(89,241,255,.55)';
-          ctx.beginPath();ctx.arc(p.x,p.y,p.size,0,Math.PI*2);ctx.fill();
-        }
-        ctx.shadowBlur=0;
-      }
-      state.raf=requestAnimationFrame(drawFrame);
-    }
-
-    resizeAmbientCanvas();
-    state.raf=requestAnimationFrame(drawFrame);
-    window.addEventListener('resize',resizeAmbientCanvas,{passive:true});
-  }
+  // Lightweight mode: no continuously rendered particles behind every page.
+  // Static grid layers in CSS keep the science-fiction appearance.
 
   function currentTeam(){return teams[teamIndex];}
   function teamPeople(){return currentTeam().ids.map(id=>byId.get(id)).filter(Boolean);}
@@ -177,8 +78,9 @@
   function teamOf(person){return teams.findIndex(t=>t.key===`${person.center}|${person.dept}`);}
   function setHash(hash){if(location.hash !== hash) location.hash = hash;}
   function pulse(){
+    if(window.innerWidth<=760 || document.body.classList.contains('fx-off'))return;
     const stage=$('stage');stage.classList.remove('switching');void stage.offsetWidth;stage.classList.add('switching');
-    clearTimeout(playChange);playChange=setTimeout(()=>stage.classList.remove('switching'),480);
+    clearTimeout(playChange);playChange=setTimeout(()=>stage.classList.remove('switching'),400);
   }
   function selectTeam(index, options={}){
     if(!teams[index])return;
@@ -583,7 +485,6 @@
     teamIndex=0;page=0;personId=null;view='team';render();
   }
   function init(){
-    ensureAmbientFx();
     window.KG_NETWORK?.init();
     readLocation();makeFilters();renderResults();
     document.addEventListener('click',e=>{
@@ -614,6 +515,7 @@
       const disabled=document.body.classList.toggle('fx-off');
       $('fxToggle').setAttribute('aria-pressed',String(!disabled));
       $('fxToggle').querySelector('b').textContent=disabled?'OFF':'ON';
+      window.KG_NETWORK?.refreshMotion();
     });
     // Low-impact pointer parallax for the tactical radar surface.
     if(window.matchMedia('(prefers-reduced-motion: no-preference)').matches){
